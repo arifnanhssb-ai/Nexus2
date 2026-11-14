@@ -211,7 +211,7 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
           firestoreDatabaseId: firestoreDatabaseId.trim() || undefined,
           serviceAccountJson: serviceAccountJson.trim() || undefined,
           firebaseToken: firebaseToken.trim() || undefined,
-          saveToGlobalProfile: autoInject,
+          saveToGlobalProfile: true,
         });
         setStatusMessage(`Firebase "${projectId.trim()}" কানেক্ট হয়েছে এবং Nexus AI কাজ শুরু করেছে!`);
         return;
@@ -231,7 +231,7 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
           appId: appId.trim() || undefined,
           firestoreDatabaseId: firestoreDatabaseId.trim() || undefined,
           autoInject,
-          saveToGlobalProfile: autoInject,
+          saveToGlobalProfile: true,
         }),
       });
       const data = await res.json();
@@ -526,9 +526,9 @@ export const FirebaseModal: React.FC<FirebaseModalProps> = ({
               {/* Global Auto-Inject Toggle */}
               <label className="flex items-center justify-between p-3 rounded-xl bg-slate-900/90 border border-slate-800 cursor-pointer">
                 <div>
-                  <div className="text-slate-200 font-semibold">Auto-Inject into all Nexus-built apps</div>
+                  <div className="text-slate-200 font-semibold">Save for Chat &amp; Firebase Projects</div>
                   <div className="text-[11px] text-slate-400">
-                    চালু থাকলে ভবিষ্যতে যেকোনো চ্যাটে Nexus AI নিজে থেকেই এই Firebase প্রজেক্ট কানেক্ট করবে
+                    এখানে কনফিগ সেভ করলে পরবর্তীতে চ্যাটে ফায়ারবেজ সেটআপ করতে বললেই Nexus AI স্বয়ংক্রিয়ভাবে এটি ব্যবহার করবে
                   </div>
                 </div>
                 <input

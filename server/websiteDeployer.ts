@@ -159,16 +159,19 @@ Phase 6: Scannable Structured Reporting
 1. LARGE MODULAR MULTI-FILE WEBSITES ONLY (MANDATORY FOR ALL WEBSITES, APPS, STORES, DASHBOARDS, PORTALS & GAMES):
    - NEVER build tiny 1-file HTML demos in \`projects/\`, NEVER dump 400+ lines into a single monolithic \`App.tsx\`, and NEVER stop after editing 2-3 small files.
    - Follow the exact 4-stage AI Studio Build Pipeline on EVERY website/app build:
-     (1) **Plan & Skill Check**: Call \`plan(steps: [...])\` and \`read_skill\` (\`frontend-design\`, \`firebase-integration\`) first.
-     (2) **Session-Scoped Modular Code (15–30+ files, 3,500–9,500+ lines via 2–4 parallel \`write_to_file\` calls per turn)**: Call \`workspace_init(sessionId, template: "react-vite" or "fullstack-express")\` to scaffold \`workspaces/<sessionId>/\`, replace ALL starter boilerplate, and write:
+     (1) **Plan & Skill Check**: Call \`plan(steps: [...])\` and \`read_skill("frontend-design")\` first. (ONLY load \`firebase-integration\` if the user explicitly mentions Firebase/Firestore!)
+     (2) **Session-Scoped Modular UI/UX Code (12–25+ files via 2–4 parallel \`write_to_file\` calls per turn)**: Call \`workspace_init(sessionId, template: "react-vite" or "fullstack-express")\` to scaffold \`workspaces/<sessionId>/\`, replace ALL starter boilerplate, and write:
          * \`src/types.ts\` (complete domain interfaces & types)
          * \`src/data/seed.ts\` + \`src/data/analytics.ts\` (rich realistic domain catalog/analytics/testimonials/FAQ data)
-         * \`src/utils/formatters.ts\` + \`src/hooks/useWorkspaceState.ts\` (persistent state hooks wired to \`firebaseBackend\` / API / localStorage)
-         * \`src/components/*.tsx\` (10–16+ focused UI modules: Navbar, HeroSection, StatsStrip, FilterBar, Catalog/ShowcaseGrid, ItemCard, InteractiveCharts, DetailModal/CartDrawer, AuthProfileModal, Testimonials/FAQ, Footer)
+         * \`src/utils/formatters.ts\` + \`src/hooks/useWorkspaceState.ts\` (interactive state hooks with \`localStorage\` persistence, or wired to \`firebaseBackend\` / API only when requested)
+         * \`src/components/*.tsx\` (8–16+ focused UI modules: Navbar, HeroSection, StatsStrip, FilterBar, Catalog/ShowcaseGrid, ItemCard, InteractiveCharts, DetailModal/CartDrawer, Testimonials/FAQ, Footer)
          * \`src/pages/*.tsx\` (4–6+ full feature pages/views with smooth navigation)
-         * \`src/App.tsx\` (clean state, \`<FirebaseProvider>\` wrapper, & page composer)
-         * \`server/routes.ts\` + \`server.ts\` (real Express CRUD/API routes when full-stack backend is needed)
-     (3) **Code-Matched Firebase Backend**: After writing \`src/types.ts\` (and for ANY app with persistence, user accounts, orders, bookings, dashboards, SaaS, e-commerce, or Firebase), call \`set_up_firebase(sessionId, platform: "web", skipInteractivePrompt: true, blueprint: {...})\` with your app's exact entities & collections. This auto-generates \`firebase-blueprint.json\`, security-hardened \`firestore.rules\`, \`src/lib/firebase.ts\`, \`src/components/FirebaseProvider.tsx\`, \`src/services/firebaseBackend.ts\` (with typed real-time \`onSnapshot\` + CRUD + zero-config local preview fallback), and \`server/firebaseAdmin.ts\` (if full-stack). Wrap your root app in \`<FirebaseProvider>\`, wire \`useFirebase()\` + \`firebaseBackend\` CRUD hooks, and call \`deploy_firebase(sessionId)\` to audit & deploy \`firestore.rules\`.
+         * \`src/App.tsx\` (clean state & page composer)
+         * \`server/routes.ts\` + \`server.ts\` (real Express CRUD/API routes ONLY when full-stack Express/backend is requested)
+         * **Pre-linked Packages**: Starter workspaces ALREADY link \`react\`, \`react-dom\`, \`lucide-react\`, \`clsx\`, \`tailwind-merge\`, \`motion\`, \`express\`, \`cors\`, \`vite\`, \`@vitejs/plugin-react\`, \`@tailwindcss/vite\`. NEVER run \`npm install\` / \`run_command\` for packages already in \`package.json\`.
+     (3) **Firebase Backend (ONLY WHEN EXPLICITLY REQUESTED)**: ONLY when the user explicitly asks to set up, connect, or use Firebase/Firestore, call \`set_up_firebase(sessionId, platform: "web", blueprint: {...})\`:
+         * If Firebase Settings already contain valid credentials, pre-flight tells you \`[SAVED FIREBASE CONFIG DETECTED IN SETTINGS]\` — call \`set_up_firebase(..., skipInteractivePrompt: true)\` to wire them seamlessly without prompting.
+         * Otherwise call \`set_up_firebase(..., interactive: true)\` so the Firebase SDK setup modal opens in front of the user. Never call \`set_up_firebase\` or \`deploy_firebase\` on ordinary UI/UX website prompts.
      (4) **Session Preview & Visual Verification**: Call \`workspace_run(action: "start")\` for live preview at \`/w/<sessionId>/\`, and verify with \`verify_live_preview\` and \`visual_qa_review\`.
    - Enforce Domain Design Craft: load domain-matched Google Fonts in \`index.html\` (ban Inter/Roboto), keep Top Bar single-line with 3 zones, zero-pill static metadata, 60-30-10 color balance, real \`generate_image\` hero/card visuals (never placeholder.com), and real interactive React state on every button/filter/modal/form.
 
@@ -221,8 +224,12 @@ export function inferWebsiteDesignBrief(promptText: string, sessionId?: string):
   }
 
   const safeId = (sessionId || 'app').replace(/[^a-zA-Z0-9_-]/g, '_');
-  const needsBackend = /(full-?stack|express|backend|database|api|postgres|sqlite|crud|auth|login|saas|ecommerce|e-commerce|store|portal|crm|booking|ফুল-স্ট্যাক|ই-কমার্স|লগইন|ডাটাবেজ)/i.test(lower);
-  const architectureTrack = `SESSION-SCOPED MODULAR BUILD + CODE-MATCHED FIREBASE BACKEND (12-25+ Files, 2,000-5,500+ Total Lines): 1) Call plan(steps:[...]) -> 2) Call workspace_init(sessionId: "${safeId}", template: "${needsBackend ? 'fullstack-express' : 'react-vite'}"), replace ALL starter template text, write workspaces/${safeId}/src/types.ts, src/data/seed.ts, src/data/analytics.ts -> 3) Call set_up_firebase(sessionId: "${safeId}", platform: "web", skipInteractivePrompt: true, blueprint: {...}) to generate firebase-blueprint.json, firestore.rules, src/lib/firebase.ts, FirebaseProvider, src/services/firebaseBackend.ts${needsBackend ? ', server/firebaseAdmin.ts' : ''} -> 4) Batch parallel write_to_file calls for src/hooks/useWorkspaceState.ts, 8-14+ modular components in src/components/*.tsx, 3-5+ pages in src/pages/*.tsx, src/App.tsx (wrapped in <FirebaseProvider>)${needsBackend ? ', server/routes.ts, server.ts' : ''} -> 5) Call deploy_firebase & workspace_run(action: "start") -> /w/${safeId}/`;
+  const wantsFirebase = /(firebase|firestore|firebaseConfig|ফায়ারবেস|ফায়ারবেস)/i.test(lower);
+  const needsExpressBackend = /(full-?stack|express|backend|server|database|postgres|sqlite|rest\s*api|ফুল-স্ট্যাক|ব্যাকএন্ড|ডাটাবেজ)/i.test(lower);
+  const firebaseFrag = wantsFirebase
+    ? ` -> Call set_up_firebase(sessionId: "${safeId}", platform: "web", blueprint: {...}) (use interactive: true if no saved Settings config) & deploy_firebase`
+    : ' -> NO Firebase setup (UI/UX + localStorage state only)';
+  const architectureTrack = `SESSION-SCOPED MODULAR UI/UX BUILD (12-25+ Files): 1) Call plan(steps:[...]) & read_skill("frontend-design") -> 2) Call workspace_init(sessionId: "${safeId}", template: "${needsExpressBackend ? 'fullstack-express' : 'react-vite'}"), replace ALL starter template text, write workspaces/${safeId}/src/types.ts, src/data/seed.ts, src/data/analytics.ts${firebaseFrag} -> 3) Batch parallel write_to_file calls for src/hooks/useWorkspaceState.ts, 8-14+ modular components in src/components/*.tsx, 3-5+ pages in src/pages/*.tsx, src/App.tsx${wantsFirebase ? ' (wrapped in <FirebaseProvider>)' : ''}${needsExpressBackend ? ', server/routes.ts, server.ts' : ''} -> 4) Call workspace_run(action: "start") -> /w/${safeId}/`;
 
   return `[LARGE WEBSITE DESIGN & ARCHITECTURE BRIEF]:
 - Detected Domain: ${domain}

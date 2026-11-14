@@ -85,7 +85,6 @@ export async function initSessionWorkspace(
     vite: rootPkg.dependencies?.vite || '^8.3.0',
     '@vitejs/plugin-react': rootPkg.dependencies?.['@vitejs/plugin-react'] || '^6.1.1',
     '@tailwindcss/vite': rootPkg.dependencies?.['@tailwindcss/vite'] || '^4.3.3',
-    firebase: rootPkg.dependencies?.firebase || '^13.3.0',
   };
 
   // Symlink root node_modules into workspace so modular React/Vite/Express apps boot immediately without npm install
@@ -487,59 +486,119 @@ async function hasRootPeerConflicts(): Promise<boolean> {
   }
 }
 
-async function runNpmInstallFast(
+function spawnNpmInstallWithTimeout(
   cwd: string,
-  pkgArgs: string = '',
-  options: { timeoutMs?: number; forceLegacyPeerDeps?: boolean } = {}
-): Promise<{ stdout: string; legacyPeerDeps: boolean; ignoredScripts?: boolean }> {
-  const timeout = options.timeoutMs ?? 120000;
-  const cleanArgs = pkgArgs.trim();
-  const baseFlags = '--no-audit --no-fund --prefer-offline';
-  const preferLegacy = Boolean(options.forceLegacyPeerDeps);
-
-  const attempt = async (extraFlags: string) => {
-    const cmd = `npm install ${baseFlags} ${extraFlags} ${cleanArgs}`.replace(/\s+/g, ' ').trim();
-    return execPromise(cmd, {
+  args: string[],
+  timeoutMs: number
+): Promise<{ stdout: string; stderr: string; timedOut: boolean; code: number | null }> {
+  return new Promise((resolve, reject) => {
+    const child = spawn('npm', args, {
       cwd,
-      timeout,
+      detached: true,
+      stdio: ['ignore', 'pipe', 'pipe'],
       env: {
         ...process.env,
         npm_config_audit: 'false',
         npm_config_fund: 'false',
         npm_config_update_notifier: 'false',
+        npm_config_progress: 'false',
+        CI: 'true',
       },
     });
+
+    let stdout = '';
+    let stderr = '';
+    let settled = false;
+    let timedOut = false;
+
+    const killTree = () => {
+      try {
+        if (child.pid) process.kill(-child.pid, 'SIGTERM');
+      } catch {
+        try { child.kill('SIGTERM'); } catch {}
+      }
+      setTimeout(() => {
+        try {
+          if (child.pid) process.kill(-child.pid, 'SIGKILL');
+        } catch {
+          try { child.kill('SIGKILL'); } catch {}
+        }
+      }, 600);
+    };
+
+    const timer = setTimeout(() => {
+      timedOut = true;
+      killTree();
+    }, timeoutMs);
+
+    child.stdout?.on('data', (d) => { stdout = (stdout + d.toString()).slice(-12000); });
+    child.stderr?.on('data', (d) => { stderr = (stderr + d.toString()).slice(-12000); });
+
+    child.on('error', (err) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      reject(err);
+    });
+
+    child.on('close', (code) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      resolve({ stdout, stderr, timedOut, code });
+    });
+  });
+}
+
+async function runNpmInstallFast(
+  cwd: string,
+  pkgArgs: string = '',
+  options: { timeoutMs?: number; forceLegacyPeerDeps?: boolean } = {}
+): Promise<{ stdout: string; legacyPeerDeps: boolean; ignoredScripts?: boolean }> {
+  const timeout = options.timeoutMs ?? 55000;
+  const cleanTokens = pkgArgs.trim() ? pkgArgs.trim().split(/\s+/).filter(Boolean) : [];
+  const baseFlags = [
+    'install',
+    '--no-audit',
+    '--no-fund',
+    '--prefer-offline',
+    '--ignore-scripts',
+    '--fetch-timeout=15000',
+    '--fetch-retries=1',
+    '--progress=false',
+  ];
+
+  const runOnce = async (extraFlags: string[]) => {
+    const args = [...baseFlags, ...extraFlags, ...cleanTokens];
+    const res = await spawnNpmInstallWithTimeout(cwd, args, timeout);
+    if (res.timedOut) {
+      const err: any = new Error(`npm install timed out after ${Math.round(timeout / 1000)}s`);
+      err.timedOut = true;
+      err.stderr = res.stderr;
+      throw err;
+    }
+    if (res.code !== 0) {
+      const err: any = new Error((res.stderr || res.stdout || `npm install exited with code ${res.code}`).trim());
+      err.stderr = res.stderr;
+      throw err;
+    }
+    return res.stdout;
   };
 
-  if (preferLegacy) {
-    try {
-      const { stdout } = await attempt('--legacy-peer-deps');
-      return { stdout, legacyPeerDeps: true };
-    } catch (legErr: any) {
-      try {
-        const { stdout } = await attempt('--legacy-peer-deps --ignore-scripts');
-        return { stdout, legacyPeerDeps: true, ignoredScripts: true };
-      } catch (ignErr: any) {
-        throw new Error((ignErr?.stderr || ignErr?.message || legErr?.stderr || legErr?.message || 'npm install failed').trim());
-      }
-    }
+  if (options.forceLegacyPeerDeps) {
+    const stdout = await runOnce(['--legacy-peer-deps']);
+    return { stdout, legacyPeerDeps: true, ignoredScripts: true };
   }
 
   try {
-    const { stdout } = await attempt('');
-    return { stdout, legacyPeerDeps: false };
+    const stdout = await runOnce([]);
+    return { stdout, legacyPeerDeps: false, ignoredScripts: true };
   } catch (firstErr: any) {
-    try {
-      const { stdout } = await attempt('--legacy-peer-deps');
-      return { stdout, legacyPeerDeps: true };
-    } catch (legErr: any) {
-      try {
-        const { stdout } = await attempt('--legacy-peer-deps --ignore-scripts');
-        return { stdout, legacyPeerDeps: true, ignoredScripts: true };
-      } catch (ignErr: any) {
-        throw new Error((ignErr?.stderr || ignErr?.message || legErr?.stderr || legErr?.message || firstErr?.message || 'npm install failed').trim());
-      }
+    if (firstErr?.timedOut) {
+      throw firstErr;
     }
+    const stdout = await runOnce(['--legacy-peer-deps']);
+    return { stdout, legacyPeerDeps: true, ignoredScripts: true };
   }
 }
 
@@ -652,23 +711,67 @@ export async function installPackagesInTarget(options: {
   const pkgArgs = packages.join(' ');
 
   if (isWorkspaceTarget) {
-    const extraDir = path.join(resolvedTarget, '.nexus_deps');
-    await fs.mkdir(extraDir, { recursive: true });
-    const extraPkgPath = path.join(extraDir, 'package.json');
-    const hasExtraPkg = await fs.access(extraPkgPath).then(() => true).catch(() => false);
-    if (!hasExtraPkg) {
-      await fs.writeFile(
-        extraPkgPath,
-        JSON.stringify({ name: 'nexus-ws-extra-deps', private: true, dependencies: {} }, null, 2),
-        'utf-8'
-      );
+    const rootNodeModules = path.resolve(process.cwd(), 'node_modules');
+    const satisfiedByRoot: Array<{ raw: string; name: string; version: string }> = [];
+    const missingFromRoot: string[] = [];
+
+    for (const rawPkg of packages) {
+      const { name, specifier } = parsePackageSpecifier(rawPkg);
+      if (!name) continue;
+      let rootVer = '';
+      try {
+        const rootPkgJson = JSON.parse(
+          await fs.readFile(path.join(rootNodeModules, name, 'package.json'), 'utf-8')
+        );
+        rootVer = String(rootPkgJson?.version || '').trim();
+      } catch {}
+
+      let matchesSpecifier = false;
+      if (rootVer) {
+        if (!specifier || specifier === '*' || specifier === 'latest') {
+          matchesSpecifier = true;
+        } else {
+          const cleanSpec = specifier.replace(/^[\^~>=<=\s]+/, '');
+          const specMajor = cleanSpec.split('.')[0];
+          const rootMajor = rootVer.split('.')[0];
+          if (specMajor && rootMajor && specMajor === rootMajor) {
+            matchesSpecifier = true;
+          }
+        }
+      }
+
+      if (matchesSpecifier) {
+        satisfiedByRoot.push({ raw: rawPkg, name, version: `^${rootVer}` });
+      } else {
+        missingFromRoot.push(rawPkg);
+      }
     }
 
+    const extraDir = path.join(resolvedTarget, '.nexus_deps');
+    const extraPkgPath = path.join(extraDir, 'package.json');
+    let resStdout = '';
+    let legacyPeerDeps = true;
+
     try {
-      const res = await runNpmInstallFast(extraDir, `${flag} ${pkgArgs}`, {
-        timeoutMs: 120000,
-        forceLegacyPeerDeps: true,
-      });
+      if (missingFromRoot.length > 0) {
+        await fs.mkdir(extraDir, { recursive: true });
+        const hasExtraPkg = await fs.access(extraPkgPath).then(() => true).catch(() => false);
+        if (!hasExtraPkg) {
+          await fs.writeFile(
+            extraPkgPath,
+            JSON.stringify({ name: 'nexus-ws-extra-deps', private: true, dependencies: {} }, null, 2),
+            'utf-8'
+          );
+        }
+
+        const missingArgs = missingFromRoot.join(' ');
+        const res = await runNpmInstallFast(extraDir, `${flag} ${missingArgs}`, {
+          timeoutMs: 55000,
+          forceLegacyPeerDeps: true,
+        });
+        resStdout = res.stdout;
+        legacyPeerDeps = res.legacyPeerDeps;
+      }
 
       await syncMergedWorkspaceNodeModules(resolvedTarget);
 
@@ -676,25 +779,35 @@ export async function installPackagesInTarget(options: {
       const wsPkgPath = path.join(resolvedTarget, 'package.json');
       try {
         const wsPkg = JSON.parse(await fs.readFile(wsPkgPath, 'utf-8'));
-        const extraPkg = JSON.parse(await fs.readFile(extraPkgPath, 'utf-8'));
-        const installedAll = { ...(extraPkg.dependencies || {}), ...(extraPkg.devDependencies || {}) };
+        let installedExtra: Record<string, string> = {};
+        try {
+          const extraPkg = JSON.parse(await fs.readFile(extraPkgPath, 'utf-8'));
+          installedExtra = { ...(extraPkg.dependencies || {}), ...(extraPkg.devDependencies || {}) };
+        } catch {}
         const sectionKey = isDev ? 'devDependencies' : 'dependencies';
         wsPkg[sectionKey] = wsPkg[sectionKey] || {};
-        for (const rawPkg of packages) {
+        for (const item of satisfiedByRoot) {
+          wsPkg[sectionKey][item.name] = wsPkg[sectionKey][item.name] || item.version || '*';
+        }
+        for (const rawPkg of missingFromRoot) {
           const { name, specifier } = parsePackageSpecifier(rawPkg);
-          wsPkg[sectionKey][name] = installedAll[name] || specifier || '*';
+          wsPkg[sectionKey][name] = installedExtra[name] || specifier || '*';
         }
         await fs.writeFile(wsPkgPath, JSON.stringify(wsPkg, null, 2), 'utf-8');
       } catch {}
 
       const relTarget = path.relative(process.cwd(), resolvedTarget) || '.';
+      const reusedNames = satisfiedByRoot.map((s) => s.name);
+      const summaryParts: string[] = [];
+      if (reusedNames.length > 0) summaryParts.push(`instant-linked root [${reusedNames.join(', ')}]`);
+      if (missingFromRoot.length > 0) summaryParts.push(`installed [${missingFromRoot.join(', ')}]`);
       return {
         success: true,
         packages,
         target: relTarget,
-        legacyPeerDeps: res.legacyPeerDeps,
-        message: `Installed [${packages.join(', ')}] in ${relTarget} successfully`,
-        stdout: res.stdout.trim().slice(-1500),
+        legacyPeerDeps,
+        message: `Resolved dependencies in ${relTarget} (${summaryParts.join('; ') || 'ok'})`,
+        stdout: resStdout.trim().slice(-1500),
       };
     } catch (err: any) {
       return {

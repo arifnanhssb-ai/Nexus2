@@ -1196,8 +1196,6 @@ function selectRelevantTools(
     baseTools.add('visual_qa_review');
     baseTools.add('workspace_init');
     baseTools.add('workspace_run');
-    baseTools.add('set_up_firebase');
-    baseTools.add('deploy_firebase');
   }
   if (/(search|docs|latest|find online|web|url|https?:\/\/|সার্চ|খুঁজ)/i.test(lower) || mode === 'search') {
     baseTools.add('search_web');
@@ -1206,14 +1204,17 @@ function selectRelevantTools(
   if (/(image|banner|logo|icon|illustration|ছবি|লোগো)/i.test(lower) || mode === 'image') {
     baseTools.add('generate_image');
   }
-  if (/(firebase|firestore|auth|login|signup|account|profile|role|admin|realtime|chat|database|sql|postgres|turso|supabase|sqlite|persist|db|saas|ecommerce|e-commerce|store|booking|crm|portal|order|ফায়ারবেস|ফায়ারবেস|লগইন|অ্যাকাউন্ট|ডাটাবেজ|সেভ|বুকিং|অর্ডার)/i.test(lower)) {
+  const hasExplicitFirebaseIntent = /(firebase|firestore|firebaseconfig|ফায়ারবেস|ফায়ারবেস)/i.test(lower);
+  if (hasExplicitFirebaseIntent) {
     baseTools.add('set_up_firebase');
     baseTools.add('deploy_firebase');
+  }
+  if (/(database|sql|postgres|turso|supabase|sqlite|drizzle|ডাটাবেজ)/i.test(lower)) {
     baseTools.add('cloudsql_execute_sql');
     baseTools.add('cloudsql_update_schema');
     baseTools.add('persistence_status');
   }
-  if (/(oauth|gmail|drive|calendar|sheets|workspace|লগইন)/i.test(lower)) {
+  if (/(oauth|gmail|drive|calendar|sheets|workspace)/i.test(lower)) {
     baseTools.add('set_up_oauth');
     baseTools.add('remove_oauth');
   }
@@ -1230,10 +1231,17 @@ function selectRelevantTools(
     baseTools.add('git_rollback');
   }
   if (!compactMode) {
-    // Allow full toolset on primary Gemini engine, still excluding redundant legacy aliases to save tokens
-    return declarations.filter(
-      (fn) => fn.name && !['fileRead', 'fileWrite', 'fileEdit', 'bash', 'listDir', 'compileProject', 'lintProject', 'restartServer', 'webSearch', 'generateImage', 'installPackage', 'moveFile', 'fileDelete'].includes(fn.name)
-    );
+    // Allow full toolset on primary Gemini engine, still excluding redundant legacy aliases and hiding Firebase tools unless explicitly requested
+    const blockedTools = new Set([
+      'fileRead', 'fileWrite', 'fileEdit', 'bash', 'listDir', 'compileProject',
+      'lintProject', 'restartServer', 'webSearch', 'generateImage', 'installPackage',
+      'moveFile', 'fileDelete',
+    ]);
+    if (!hasExplicitFirebaseIntent) {
+      blockedTools.add('set_up_firebase');
+      blockedTools.add('deploy_firebase');
+    }
+    return declarations.filter((fn) => fn.name && !blockedTools.has(fn.name));
   }
   return declarations.filter((fn) => fn.name && baseTools.has(fn.name) && OPENAI_CORE_TOOL_NAMES.has(fn.name));
 }
@@ -1899,9 +1907,9 @@ async function runMandatorySelfHealingGate(
           );
         }
 
-        // Code-Matched Firebase Backend Audit (verify rules, SDK, provider & backend service wiring)
+        // Code-Matched Firebase Backend Audit (only when Firebase already provisioned OR explicitly requested by user)
         const bpRaw = await fs.readFile(path.join(wsDir, 'firebase-blueprint.json'), 'utf-8').catch(() => '');
-        const needsFirebaseBackend = /(firebase|firestore|auth|login|signup|account|saas|ecommerce|e-commerce|store|portal|crm|booking|dashboard|database|persist|বুকিং|লগইন|ই-কমার্স|ডাটাবেজ|ফায়ারবেস|ফায়ারবেস)/i.test(
+        const needsFirebaseBackend = /(firebase|firestore|firebaseconfig|ফায়ারবেস|ফায়ারবেস)/i.test(
           harnessCtx?.originalPrompt || ''
         );
         if (bpRaw.trim()) {
@@ -1911,7 +1919,7 @@ async function runMandatorySelfHealingGate(
           const rulesCheck = auditFirestoreRules(rulesRaw, parsedBp);
           if (!rulesCheck.valid) {
             failures.push(
-              `[Firebase firestore.rules Validation Failed (/w/${safeWsId})]: ${rulesCheck.issues.join(' | ')}. Call set_up_firebase(sessionId: "${safeWsId}", platform: "web", skipInteractivePrompt: true) or deploy_firebase(sessionId: "${safeWsId}").`
+              `[Firebase firestore.rules Validation Failed (/w/${safeWsId})]: ${rulesCheck.issues.join(' | ')}. Call set_up_firebase(sessionId: "${safeWsId}", platform: "web") or deploy_firebase(sessionId: "${safeWsId}").`
             );
           }
           const hasFbBackend = await fs.access(path.join(wsDir, 'src/services/firebaseBackend.ts')).then(() => true).catch(() => false);
@@ -1919,7 +1927,7 @@ async function runMandatorySelfHealingGate(
           const hasFbProvider = await fs.access(path.join(wsDir, 'src/components/FirebaseProvider.tsx')).then(() => true).catch(() => false);
           if (!hasFbBackend || !hasFbSdk || !hasFbProvider) {
             failures.push(
-              `[Firebase Backend Wiring Incomplete (/w/${safeWsId})]: Missing ${[!hasFbSdk && 'src/lib/firebase.ts', !hasFbProvider && 'src/components/FirebaseProvider.tsx', !hasFbBackend && 'src/services/firebaseBackend.ts'].filter(Boolean).join(', ')}. Call set_up_firebase(sessionId: "${safeWsId}", platform: "web", skipInteractivePrompt: true) to generate code-matched Firebase backend modules.`
+              `[Firebase Backend Wiring Incomplete (/w/${safeWsId})]: Missing ${[!hasFbSdk && 'src/lib/firebase.ts', !hasFbProvider && 'src/components/FirebaseProvider.tsx', !hasFbBackend && 'src/services/firebaseBackend.ts'].filter(Boolean).join(', ')}. Call set_up_firebase(sessionId: "${safeWsId}", platform: "web") to generate code-matched Firebase backend modules.`
             );
           } else {
             const appRaw = await fs.readFile(path.join(wsDir, 'src/App.tsx'), 'utf-8').catch(() => '');
@@ -1932,7 +1940,7 @@ async function runMandatorySelfHealingGate(
           }
         } else if (needsFirebaseBackend && (harnessCtx?.selfHealRound || 0) === 0) {
           failures.push(
-            `[Code-Matched Firebase Backend Missing (/w/${safeWsId})]: This app requires persistent data/auth/backend. Call set_up_firebase(sessionId: "${safeWsId}", platform: "web", skipInteractivePrompt: true, blueprint: {...}) matching src/types.ts, wrap src/App.tsx in <FirebaseProvider>, wire CRUD to src/services/firebaseBackend.ts, and call deploy_firebase(sessionId: "${safeWsId}").`
+            `[Code-Matched Firebase Backend Missing (/w/${safeWsId})]: The user requested Firebase. Call set_up_firebase(sessionId: "${safeWsId}", platform: "web", blueprint: {...}) matching src/types.ts, wrap src/App.tsx in <FirebaseProvider>, wire CRUD to src/services/firebaseBackend.ts, and call deploy_firebase(sessionId: "${safeWsId}").`
           );
         }
       }
@@ -3641,8 +3649,7 @@ MANDATORY WEBSITE REPLICATION GUIDELINES:
         geminiModel: geminiCreds?.model,
         llmInvoker: invoker,
         allowInteractiveFirebasePrompt:
-          /(firebase|firestore|ফায়ারবেস|ফায়ারবেস)/i.test(initialLastMessage) &&
-          /(connect|setup|set\s*up|link|config|credential|কানেক্ট|সেটআপ|লিঙ্ক|কনফিগ|যুক্ত)/i.test(initialLastMessage),
+          /(firebase|firestore|firebaseconfig|ফায়ারবেস|ফায়ারবেস)/i.test(initialLastMessage),
         onAskQuestion: (questions) => {
           const questionId = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
           return new Promise((resolve) => {
@@ -4064,6 +4071,44 @@ MANDATORY WEBSITE REPLICATION GUIDELINES:
 
         const fbExecCtx: ToolExecutionContext = {
           sessionId,
+          allowInteractiveFirebasePrompt:
+            /(firebase|firestore|firebaseconfig|ফায়ারবেস|ফায়ারবেস)/i.test(initialLastMessage),
+          onAskQuestion: (questions) => {
+            const questionId = `q_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            return new Promise((resolve) => {
+              const timer = setTimeout(() => {
+                if (pendingQuestionResolvers.delete(questionId)) {
+                  resolve({ answers: {}, skipped: true, notes: 'Timed out waiting for response.' });
+                }
+              }, 120000);
+              pendingQuestionResolvers.set(questionId, { resolve, timer });
+              res.once('close', () => {
+                if (pendingQuestionResolvers.delete(questionId)) {
+                  clearTimeout(timer);
+                  resolve({ answers: {}, skipped: true, notes: 'Client disconnected.' });
+                }
+              });
+              sendEvent({ type: 'ask_question', questionId, questions });
+            });
+          },
+          onRequestFirebaseSetup: (reqInfo) => {
+            const requestId = `fb_${Date.now()}_${Math.random().toString(36).slice(2, 8)}`;
+            return new Promise((resolve) => {
+              const timer = setTimeout(() => {
+                if (pendingFirebaseResolvers.delete(requestId)) {
+                  resolve({ action: 'scaffold' });
+                }
+              }, 120000);
+              pendingFirebaseResolvers.set(requestId, { resolve, timer });
+              res.once('close', () => {
+                if (pendingFirebaseResolvers.delete(requestId)) {
+                  clearTimeout(timer);
+                  resolve({ action: 'scaffold' });
+                }
+              });
+              sendEvent({ type: 'firebase_setup_request', requestId, ...reqInfo });
+            });
+          },
           llmInvoker: async (sys, usr) => {
             const subRes = await client.models.generateContent({
               model: fallbackModel,

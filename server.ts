@@ -894,8 +894,8 @@ async function startServer() {
       } = req.body || {};
 
       const parsed = configSnippet ? parseFirebaseConfigInput(configSnippet) : {};
-      const finalProjectId = projectId || parsed.projectId;
-      const finalApiKey = apiKey || parsed.apiKey;
+      const finalProjectId = (projectId || parsed.projectId || '').trim();
+      const finalApiKey = (apiKey || parsed.apiKey || '').trim();
 
       if (!finalProjectId || !finalApiKey) {
         return res.status(400).json({
@@ -903,21 +903,50 @@ async function startServer() {
         });
       }
 
-      if (autoInject !== undefined) {
-        await saveFirebaseProfile({ autoInject: Boolean(autoInject) });
+      const webConfigPayload = {
+        projectId: finalProjectId,
+        apiKey: finalApiKey,
+        authDomain: (authDomain || parsed.authDomain || `${finalProjectId}.firebaseapp.com`).trim(),
+        storageBucket: (storageBucket || parsed.storageBucket || `${finalProjectId}.appspot.com`).trim(),
+        messagingSenderId: (messagingSenderId || parsed.messagingSenderId || '').trim(),
+        appId: (appId || parsed.appId || '').trim(),
+        ...(firestoreDatabaseId || parsed.firestoreDatabaseId
+          ? { firestoreDatabaseId: String(firestoreDatabaseId || parsed.firestoreDatabaseId).trim() }
+          : {}),
+      };
+
+      if (saveToGlobalProfile !== false || autoInject !== undefined) {
+        await saveFirebaseProfile({
+          ...(saveToGlobalProfile !== false ? { webConfig: webConfigPayload } : {}),
+          ...(autoInject !== undefined ? { autoInject: Boolean(autoInject) } : {}),
+        });
+      }
+
+      const safeSid = sanitizeFirebaseSessionId(sessionId);
+      const wsDir = safeSid ? path.join(process.cwd(), 'workspaces', safeSid) : '';
+      const hasInitializedWs = wsDir
+        ? await fs.access(path.join(wsDir, 'package.json')).then(() => true).catch(() => false)
+        : false;
+      const projDir = safeSid ? path.join(process.cwd(), 'projects', safeSid) : '';
+      const hasStaticProj = projDir
+        ? await fs.access(path.join(projDir, 'index.html')).then(() => true).catch(() => false)
+        : false;
+
+      if (!hasInitializedWs && !hasStaticProj) {
+        return res.json({
+          success: true,
+          savedGlobalProfileOnly: true,
+          projectId: finalProjectId,
+          message: `Firebase "${finalProjectId}" সেটিংসে সেভ হয়েছে! এখন চ্যাটে যেকোনো সময় ফায়ারবেজ সেটআপ করতে বললেই এটি স্বয়ংক্রিয়ভাবে কানেক্ট হবে।`,
+        });
       }
 
       const result = await provisionFirebaseForTarget({
-        sessionId,
+        sessionId: safeSid,
         platform: 'web',
-        projectId: finalProjectId,
-        apiKey: finalApiKey,
-        authDomain: authDomain || parsed.authDomain,
-        storageBucket: storageBucket || parsed.storageBucket,
-        messagingSenderId: messagingSenderId || parsed.messagingSenderId,
-        appId: appId || parsed.appId,
-        firestoreDatabaseId: firestoreDatabaseId || parsed.firestoreDatabaseId,
+        ...webConfigPayload,
         saveToGlobalProfile: Boolean(saveToGlobalProfile),
+        preferSavedProfile: true,
       });
 
       res.json(result);

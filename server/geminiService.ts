@@ -775,8 +775,8 @@ const setUpFirebaseTool: FunctionDeclaration = {
       },
       rules: { type: Type.STRING, description: "Optional custom firestore.rules content (otherwise auto-generated from blueprint)." },
       saveToGlobalProfile: { type: Type.BOOLEAN, description: "If true and real credentials are passed, save them globally for future Nexus apps." },
-      skipInteractivePrompt: { type: Type.BOOLEAN, description: "Set true during autonomous website builds so Firebase backend files scaffold immediately without pausing for modal input." },
-      interactive: { type: Type.BOOLEAN, description: "Set true if the user explicitly asked to connect/link a live Firebase account now." },
+      skipInteractivePrompt: { type: Type.BOOLEAN, description: "Only set true when saved Firebase Settings already exist; do NOT set true when no credentials exist and user asked to set up Firebase." },
+      interactive: { type: Type.BOOLEAN, description: "Set true when the user asked to set up/connect Firebase and no saved credentials exist yet." },
       userConfirmedTermsAcceptedInUI: { type: Type.BOOLEAN, description: "Whether Firebase provisioning is confirmed." },
     },
     required: ["platform"],
@@ -2999,17 +2999,17 @@ export async function executeServerTool(
           blueprint: args.blueprint,
           rules: args.rules,
           saveToGlobalProfile: args.saveToGlobalProfile !== false,
+          preferSavedProfile: true,
         };
 
         let result = await provisionFirebaseForTarget(baseOptions);
 
-        // Only pause for interactive Firebase modal when the user explicitly asked to connect Firebase (or args.interactive === true)
+        // Open Firebase SDK setup UI whenever credentials aren't configured yet and the user explicitly requested Firebase
         const shouldPromptInteractive =
           result.requiresUserCredentials &&
-          args.skipInteractivePrompt !== true &&
           args.userConfirmedTermsAcceptedInUI !== false &&
-          Boolean(args.interactive === true || execCtx?.allowInteractiveFirebasePrompt) &&
-          Boolean(execCtx?.onRequestFirebaseSetup);
+          Boolean(execCtx?.onRequestFirebaseSetup) &&
+          (Boolean(execCtx?.allowInteractiveFirebasePrompt) || (args.interactive === true && args.skipInteractivePrompt !== true));
 
         if (shouldPromptInteractive && execCtx?.onRequestFirebaseSetup) {
           const collectionPaths = Array.isArray(args.blueprint?.collections)
@@ -3020,7 +3020,7 @@ export async function executeServerTool(
             sessionId: activeSessionId,
             projectIdHint: args.projectId,
             collections: collectionPaths,
-            reason: 'Connect your Firebase project (or continue in local scaffold mode).',
+            reason: 'আপনার Firebase SDK কনফিগ দিন এবং Connect করুন (অথবা Skip করলে লোকাল Scaffold মোডে চলবে)।',
           });
 
           if (setupResp.action === 'cancel') {

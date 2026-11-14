@@ -5,6 +5,7 @@ import { DatabaseSync } from 'node:sqlite';
 import { transformSync } from 'esbuild';
 import { rankAstContext } from './astContextRanker.ts';
 import { buildCodebaseGraph } from './workspaceEngine.ts';
+import { isPlaceholderValue, loadFirebaseProfile } from './firebaseProvisioner.ts';
 
 const NODE_BUILTINS = new Set([
   ...builtinModules,
@@ -327,6 +328,10 @@ export function isGitHubClonePrompt(promptText: string): boolean {
   return /(?:gh\s+repo\s+clone|git\s+clone|github\.com\/[a-z0-9_.-]+\/[a-z0-9_.-]+|(?:clone|import|ক্লোন|ইমপোর্ট).*(?:repo|repository|github|রিপো|প্রিভিউ)|(?:repo|repository|রিপো).*(?:clone|ক্লোন))/i.test(lower);
 }
 
+export function isExplicitFirebasePrompt(promptText: string): boolean {
+  return /(?:firebase|firestore|firebaseConfig|ফায়ারবেস|ফায়ারবেস)/i.test(promptText || '');
+}
+
 export function shouldUseModularArchitecture(promptText: string): boolean {
   const lower = (promptText || '').toLowerCase();
   if (isGitHubClonePrompt(promptText) || /(server\/apiOrchestrator|src\/components\/GoogleAIStudioCoderView)/i.test(lower)) return false;
@@ -351,43 +356,47 @@ export function getVerifiedScaffoldBlueprint(promptText: string, sessionId?: str
   const isBuild = shouldUseModularArchitecture(promptText) || /(build|create|make|design|develop|app|website|dashboard|saas|store|ecommerce|e-commerce|portfolio|landing|auth|login|api|বানা|তৈরি|ওয়েবসাইট|ওয়েবসাইট|সাইট|ড্যাশবোর্ড|ই-কমার্স)/i.test(lower);
   if (!isBuild) return null;
 
-  const needsBackend = /(full-?stack|express|backend|database|api|postgres|sqlite|crud|auth|login|firebase|firestore|saas|ecommerce|e-commerce|store|portal|crm|booking|ফুল-স্ট্যাক|ই-কমার্স|ডাটাবেজ|ফায়ারবেস|ফায়ারবেস)/i.test(lower);
+  const wantsFirebase = isExplicitFirebasePrompt(promptText);
+  const needsExpressBackend = /(full-?stack|express|backend|server|database|postgres|sqlite|rest\s*api|ফুল-স্ট্যাক|ব্যাকএন্ড|ডাটাবেজ)/i.test(lower);
   const modular = shouldUseModularArchitecture(promptText);
+  const firebaseStep = wantsFirebase
+    ? `\n  3) Call \`set_up_firebase(sessionId: "${safeId}", platform: "web", blueprint: {...})\` matching your \`src/types.ts\` entities/collections (follow [SAVED FIREBASE CONFIG DETECTED] or [FIREBASE SDK SETUP UI REQUIRED] below), then call \`deploy_firebase(sessionId: "${safeId}")\`.`
+    : `\n  3) [UI/UX ONLY — NO FIREBASE]: Do NOT load \`firebase-integration\`, do NOT call \`set_up_firebase\` or \`deploy_firebase\`, and do NOT install \`firebase\`. Starter workspaces already link \`react\`, \`react-dom\`, \`lucide-react\`, \`clsx\`, \`tailwind-merge\`, \`motion\`, \`express\`, \`cors\`, \`vite\`, \`@vitejs/plugin-react\`, \`@tailwindcss/vite\` — do NOT run \`npm install\` for already-installed packages.`;
+
   const modularLayout = modular
-    ? `\n- FULL-SCALE SESSION-SCOPED MODULAR ARCHITECTURE + CODE-MATCHED FIREBASE BACKEND (12–30+ FILES, 2,500–9,500+ TOTAL LINES — PARALLEL BATCH WRITES):
-  1) Call \`plan(steps: [...])\` + \`read_skill("frontend-design")\` + \`read_skill("firebase-integration")\` first.
-  2) Call \`workspace_init(sessionId: "${safeId}", template: "${needsBackend ? 'fullstack-express' : 'react-vite'}")\`, replace ALL starter template text, and batch 2–4 parallel \`write_to_file\` calls per turn inside \`workspaces/${safeId}/\`:
+    ? `\n- FULL-SCALE SESSION-SCOPED MODULAR UI/UX ARCHITECTURE${wantsFirebase ? ' + FIREBASE BACKEND' : ''} (12–25+ FILES — PARALLEL BATCH WRITES):
+  1) Call \`plan(steps: [...])\` + \`read_skill("frontend-design")\`${wantsFirebase ? ' + `read_skill("firebase-integration")`' : ''} first.
+  2) Call \`workspace_init(sessionId: "${safeId}", template: "${needsExpressBackend ? 'fullstack-express' : 'react-vite'}")\`, replace ALL starter template text, and batch 2–4 parallel \`write_to_file\` calls per turn inside \`workspaces/${safeId}/\`:
      * \`src/types.ts\` (comprehensive domain TypeScript interfaces, filter/sort/modal/cart/analytics types)
-     * \`src/data/seed.ts\` + \`src/data/analytics.ts\` (rich multi-category dataset: 15–30+ items, time-series metrics, testimonials, pricing plans, FAQ)
-  3) Call \`set_up_firebase(sessionId: "${safeId}", platform: "web", skipInteractivePrompt: true, blueprint: {...})\` matching your \`src/types.ts\` entities/collections (writes \`firebase-blueprint.json\`, security-hardened \`firestore.rules\`, \`src/lib/firebase.ts\`, \`src/components/FirebaseProvider.tsx\`, \`src/services/firebaseBackend.ts\`${needsBackend ? ', `server/firebaseAdmin.ts`' : ''}), then call \`deploy_firebase(sessionId: "${safeId}")\`.
+     * \`src/data/seed.ts\` + \`src/data/analytics.ts\` (rich multi-category dataset: 15–30+ items, time-series metrics, testimonials, pricing plans, FAQ)${firebaseStep}
   4) Batch parallel \`write_to_file\` calls for:
-     * \`src/utils/formatters.ts\` + \`src/hooks/useWorkspaceState.ts\` (real CRUD & real-time sync wired to \`src/services/firebaseBackend.ts\` + local fallback)
-     * \`src/components/*.tsx\` (8–16+ focused components: Navbar, MobileNavDrawer, HeroSection, StatsStrip, FilterSidebar, SearchCommandBar, CatalogOrGrid, ItemCard, InteractiveChartPanel, ComparisonTable, DetailModal, CartOrActionDrawer, AuthProfileModal, TestimonialsSection, FaqAccordion, Footer)
+     * \`src/utils/formatters.ts\` + \`src/hooks/useWorkspaceState.ts\` (${wantsFirebase ? 'real CRUD wired to `src/services/firebaseBackend.ts` + local fallback' : 'rich interactive React state + localStorage persistence'})
+     * \`src/components/*.tsx\` (8–14+ focused UI/UX components: Navbar, MobileNavDrawer, HeroSection, StatsStrip, FilterSidebar, SearchCommandBar, CatalogOrGrid, ItemCard, InteractiveChartPanel, ComparisonTable, DetailModal, CartOrActionDrawer, TestimonialsSection, FaqAccordion, Footer)
      * \`src/pages/*.tsx\` (4–6+ complete interactive views: HomePage, ExplorePage, AnalyticsPage, SavedOrOrdersPage, SettingsOrProfilePage)
-     * \`src/App.tsx\` (clean multi-page router wrapped in \`<FirebaseProvider>\`, keyboard shortcuts, toast provider & modal orchestrator)${needsBackend ? `\n     * \`server/routes.ts\` + \`server.ts\` (real Express REST CRUD API mounted at \`/w/${safeId}/api\` and \`/api\`, wired with \`server/firebaseAdmin.ts\`)` : ''}
+     * \`src/App.tsx\` (${wantsFirebase ? 'wrapped in `<FirebaseProvider>`, ' : ''}clean multi-page router, keyboard shortcuts, toast provider & modal orchestrator)${needsExpressBackend ? `\n     * \`server/routes.ts\` + \`server.ts\` (real Express REST CRUD API mounted at \`/w/${safeId}/api\` and \`/api\`)` : ''}
   5) Start session preview via \`workspace_run(action: "start")\` -> live at \`/w/${safeId}/\`, then verify with \`verify_live_preview\`.`
     : '';
 
   if (/(saas|dashboard|admin|analytics|crm|erp|inventory|ড্যাশবোর্ড|অ্যাডমিন)/i.test(lower)) {
-    return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — SAAS / DASHBOARD]:
-- Use full-scale modular architecture: Sidebar + Topbar + 4-6 Multi-Page Views + KPI Summary Strip + Interactive SVG Charts + Sortable/Filterable Data Table + Create/Edit Drawer + Code-Matched Firebase Backend (\`firebaseBackend.ts\` + \`firestore.rules\`).
+    return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — SAAS / DASHBOARD UI/UX]:
+- Use full-scale modular UI/UX architecture: Sidebar + Topbar + 4-6 Multi-Page Views + KPI Summary Strip + Interactive SVG Charts + Sortable/Filterable Data Table + Create/Edit Drawer${wantsFirebase ? ' + Firebase Backend (`firebaseBackend.ts` + `firestore.rules`)' : ' + Client State / localStorage'}.
 - Every tab, filter, search box, sort toggle, and CRUD modal must mutate real state and persist cleanly.${modularLayout}`;
   }
 
   if (/(store|shop|ecommerce|e-commerce|product|cart|checkout|ই-কমার্স|স্টোর|দোকান)/i.test(lower)) {
-    return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — E-COMMERCE]:
-- Use full-scale modular storefront architecture: Sticky Header (Search + Multi-Page Nav + Wishlist + Account/Sign-In + Live Cart Badge) -> Editorial Hero -> Featured Collections -> Filterable Product Grid (Quick View + Add to Cart) -> Slide-over Cart Drawer (Qty +/- / Coupon / Subtotal / Checkout Modal) -> Order Tracking persisted via Code-Matched Firebase Backend (\`firebaseBackend.ts\` + \`firestore.rules\`), Reviews, FAQ & Footer.
+    return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — E-COMMERCE UI/UX]:
+- Use full-scale modular storefront UI/UX architecture: Sticky Header (Search + Multi-Page Nav + Wishlist + Account + Live Cart Badge) -> Editorial Hero -> Featured Collections -> Filterable Product Grid (Quick View + Add to Cart) -> Slide-over Cart Drawer (Qty +/- / Coupon / Subtotal / Checkout Modal) -> Order Tracking, Reviews, FAQ & Footer${wantsFirebase ? ' backed by Firebase' : ''}.
 - Persist cart/wishlist/orders state cleanly and verify every interactive button works without console errors.${modularLayout}`;
   }
 
-  if (needsBackend) {
-    return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — FULL-STACK + FIREBASE]:
-- Separate contracts cleanly: Plan -> Shared Types -> Code-Matched Firebase Backend (\`firebase-blueprint.json\`, \`firestore.rules\`, \`src/services/firebaseBackend.ts\`, \`server/firebaseAdmin.ts\`) -> Express API Routes (mounted before Vite/static fallback) -> Multi-Page React Views & Components.
-- Validate request bodies, return structured JSON errors, and ensure frontend calls real endpoints + \`firebaseBackend\`.${modularLayout}`;
+  if (needsExpressBackend || wantsFirebase) {
+    return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — FULL-STACK${wantsFirebase ? ' + FIREBASE' : ''}]:
+- Separate contracts cleanly: Plan -> Shared Types -> ${wantsFirebase ? 'Firebase Backend (`firebase-blueprint.json`, `firestore.rules`, `src/services/firebaseBackend.ts`) -> ' : ''}${needsExpressBackend ? 'Express API Routes (mounted before Vite/static fallback) -> ' : ''}Multi-Page React Views & Components.
+- Validate request bodies, return structured JSON errors, and ensure interactive frontend controls work cleanly.${modularLayout}`;
   }
 
-  return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — FULL-SCALE MODULAR WEBSITE]:
-- Build a comprehensive multi-page, multi-section production website with rich domain data, code-matched Firebase persistence, responsive mobile/desktop layout, and real interactive React state on every button, filter, tab, modal, and form.${modularLayout}`;
+  return `[VERIFIED LARGE SCAFFOLD BLUEPRINT — MODULAR UI/UX WEBSITE]:
+- Build a comprehensive multi-page, multi-section production UI/UX website with rich domain data, responsive mobile/desktop layout, and real interactive React state on every button, filter, tab, modal, and form (no unrequested Firebase/backend wiring).${modularLayout}`;
 }
 
 // Deterministic Task Checklist for multi-step large website builds
@@ -400,13 +409,16 @@ export function buildDeterministicTaskPlan(promptText: string): string | null {
       /(build|create|implement|fullstack|full-stack|website|dashboard|ecommerce|app|clone|refactor|বানা|তৈরি|ওয়েবসাইট|ওয়েবসাইট|সাইট|ড্যাশবোর্ড|ই-কমার্স)/i.test(lower));
   if (!isComplexBuild) return null;
 
-  return `[MANDATORY HARNESS EXECUTION CHECKLIST — GOOGLE AI STUDIO BUILD PIPELINE]:
-Nexus executes the complete systematic pipeline across ALL APIs (target 12–30+ files, 2,500–9,500+ total lines via batched parallel \`write_to_file\` calls — ZERO thin demos, ZERO monolithic App.tsx, ZERO single-file \`projects/*.html\`):
-1. [Plan & Skill Check] Call \`plan(steps: [...])\` + \`read_skill("frontend-design")\` / \`read_skill("firebase-integration")\` before writing app files.
-2. [Scaffold, Types & Data] Call \`workspace_init\` to create \`workspaces/<sessionId>/\`, then write rich \`src/types.ts\`, \`src/data/seed.ts\`, \`src/data/analytics.ts\`.
-3. [Code-Matched Firebase Backend] Call \`set_up_firebase(sessionId, platform: "web", skipInteractivePrompt: true, blueprint: {...})\` matching your \`src/types.ts\` collections/entities -> generates \`firebase-blueprint.json\`, \`firestore.rules\`, \`src/lib/firebase.ts\`, \`src/components/FirebaseProvider.tsx\`, \`src/services/firebaseBackend.ts\` (+ \`server/firebaseAdmin.ts\` if fullstack) -> call \`deploy_firebase(sessionId)\`.
-4. [Hooks, 8-16+ Modular Components & 4-6+ Pages] Batch parallel \`write_to_file\` calls (2-4 files per turn, ~180-320 lines each) across \`src/hooks/useWorkspaceState.ts\` (wired to \`firebaseBackend\`), \`src/components/*.tsx\`, \`src/pages/*.tsx\`, \`src/App.tsx\` (wrapped in \`<FirebaseProvider>\`), plus \`server/routes.ts\` & \`server.ts\` if full-stack.
-5. [Start Session Preview & Verify] Call \`workspace_run(action: "start")\`, \`verify_live_preview(targetUrl: "/w/<sessionId>/")\`, and \`visual_qa_review(targetUrl: "/w/<sessionId>/")\`, passing \`tsc --noEmit\`, \`vite build\`, scale audit, Firebase audit, and DOM verification.`;
+  const wantsFirebase = isExplicitFirebasePrompt(promptText);
+  const firebasePlanStep = wantsFirebase
+    ? `\n3. [Firebase SDK & Backend] Check [SAVED FIREBASE CONFIG DETECTED] vs [FIREBASE SDK SETUP UI REQUIRED] and call \`set_up_firebase\` + \`deploy_firebase\`.`
+    : `\n3. [Interactive State & UX Polish] Wire interactive filters, modals, drawers, and \`localStorage\` persistence (NO unrequested Firebase setup or redundant \`npm install\` of pre-linked packages).`;
+
+  return `[MANDATORY HARNESS EXECUTION CHECKLIST]:
+1. [Plan & Design Skill] Call \`plan(steps: [...])\` + \`read_skill("frontend-design")\`${wantsFirebase ? ' + `read_skill("firebase-integration")`' : ''} before writing app files.
+2. [Scaffold, Types & Data] Call \`workspace_init\` to create \`workspaces/<sessionId>/\`, then write rich \`src/types.ts\`, \`src/data/seed.ts\`, \`src/data/analytics.ts\`.${firebasePlanStep}
+4. [Modular Components & Pages] Batch parallel \`write_to_file\` calls (2-4 files per turn) across \`src/hooks/useWorkspaceState.ts\`, \`src/components/*.tsx\`, \`src/pages/*.tsx\`, \`src/App.tsx\`${wantsFirebase ? ' (wrapped in `<FirebaseProvider>`)' : ''}.
+5. [Start Session Preview & Verify] Call \`workspace_run(action: "start")\`, \`verify_live_preview(targetUrl: "/w/<sessionId>/")\`, passing \`vite build\` and DOM verification.`;
 }
 
 // Pre-Flight Context Injector: gives ANY model real dependency graph, installed packages, AST signatures, and scaffold rules
@@ -416,15 +428,17 @@ export async function buildHarnessPreFlightContext(
 ): Promise<string> {
   if (options.isConversational) return '';
   const blocks: string[] = [];
+  const safeId = (options.sessionId || 'app').replace(/[^a-zA-Z0-9_-]/g, '_');
 
   try {
-    // 1. Always inject installed packages for React/TS/code tasks so models never hallucinate uninstalled libraries
-    const isCodeTask = /(src\/|server\/|react|vite|express|component|endpoint|route|typescript|tsx|ts|bug|error|fix|refactor|feature|app|build|create|website|dashboard|কোড|ফিক্স|এরর|বানা|তৈরি|ওয়েবসাইট)/i.test(promptText);
+    // 1. Inject installed packages from active workspace or root package.json so models never run redundant npm installs
+    const isCodeTask = /(src\/|server\/|react|vite|express|component|endpoint|route|typescript|tsx|ts|bug|error|fix|refactor|feature|app|build|create|website|dashboard|firebase|firestore|কোড|ফিক্স|এরর|বানা|তৈরি|ওয়েবসাইট|ফায়ারবেস|ফায়ারবেস)/i.test(promptText);
     if (isCodeTask) {
-      const deps = await loadPackageDependencySet('package.json');
+      const wsPkgRel = options.sessionId ? `workspaces/${safeId}/package.json` : 'package.json';
+      const deps = (await loadPackageDependencySet(wsPkgRel)) || (await loadPackageDependencySet('package.json'));
       if (deps && deps.size > 0) {
         const list = Array.from(deps).filter((d) => !d.startsWith('@types/')).sort().slice(0, 35);
-        blocks.push(`[INSTALLED PACKAGES IN package.json]: ${list.join(', ')}`);
+        blocks.push(`[PRE-INSTALLED PACKAGES (DO NOT npm install these)]: ${list.join(', ')}`);
       }
 
       // 2. AST Context Ranker (top relevant files & exported symbols)
@@ -456,7 +470,33 @@ export async function buildHarnessPreFlightContext(
       }
     }
 
-    // 5. Verified Scaffold Blueprint + Mandatory Checklist
+    // 5. Explicit Firebase pre-flight: detect whether user already saved SDK credentials in Settings vs needs SDK input modal
+    if (isExplicitFirebasePrompt(promptText)) {
+      const profile = await loadFirebaseProfile().catch(() => null);
+      let wsCfg: any = null;
+      if (options.sessionId) {
+        wsCfg = await fs
+          .readFile(path.resolve(process.cwd(), 'workspaces', safeId, 'firebase-config.json'), 'utf-8')
+          .then(JSON.parse)
+          .catch(() => null);
+      }
+      const savedProjectId =
+        (!isPlaceholderValue(wsCfg?.projectId) && !isPlaceholderValue(wsCfg?.apiKey) && wsCfg.projectId) ||
+        (!isPlaceholderValue(profile?.webConfig?.projectId) && !isPlaceholderValue(profile?.webConfig?.apiKey) && profile?.webConfig?.projectId) ||
+        '';
+
+      if (savedProjectId) {
+        blocks.push(
+          `[SAVED FIREBASE CONFIG DETECTED IN SETTINGS]: User already configured Firebase project "${savedProjectId}" in Firebase Settings. Call \`set_up_firebase(sessionId: "${safeId}", platform: "web", skipInteractivePrompt: true, blueprint: {...})\` to seamlessly wire their saved credentials into \`src/lib/firebase.ts\`, \`FirebaseProvider.tsx\`, \`src/services/firebaseBackend.ts\`, and \`firestore.rules\`, then call \`deploy_firebase(sessionId: "${safeId}")\`.`
+        );
+      } else {
+        blocks.push(
+          `[FIREBASE SDK SETUP UI REQUIRED]: The user asked to set up Firebase and NO saved Firebase SDK credentials exist in Firebase Settings yet. Do NOT pass \`skipInteractivePrompt: true\` — call \`set_up_firebase(sessionId: "${safeId}", platform: "web", interactive: true, blueprint: {...})\` so the interactive Firebase SDK setup UI opens immediately for the user to enter their config.`
+        );
+      }
+    }
+
+    // 6. Verified Scaffold Blueprint + Mandatory Checklist
     const blueprint = getVerifiedScaffoldBlueprint(promptText, options.sessionId);
     if (blueprint) blocks.push(blueprint);
 

@@ -1613,6 +1613,7 @@ export async function provisionFirebaseForTarget(options: {
   blueprint?: FirebaseBlueprint;
   rules?: string;
   saveToGlobalProfile?: boolean;
+  preferSavedProfile?: boolean;
 }) {
   const { targetDir, relativeRoot, kind } = await resolveFirebaseTargetDir(options.sessionId, options.targetDir);
   const profile = await loadFirebaseProfile();
@@ -1623,7 +1624,7 @@ export async function provisionFirebaseForTarget(options: {
     existingCfg = JSON.parse(await fs.readFile(configPath, 'utf-8'));
   } catch {}
 
-  const globalCfg = profile.autoInject ? profile.webConfig : {};
+  const globalCfg = (profile.autoInject || options.preferSavedProfile) ? profile.webConfig : {};
 
   const pick = (explicit?: string, existing?: string, globalVal?: string, envVal?: string, fallback = '') => {
     for (const candidate of [explicit, existing, globalVal, envVal]) {
@@ -1823,7 +1824,7 @@ export const isFirebaseConfigured = ${hasRealCreds};
     targetRoot: relativeRoot || '.',
     workspaceKind: kind,
     configuredWithRealCredentials: hasRealCreds,
-    inheritedFromGlobalProfile: Boolean(profile.autoInject && !options.projectId && hasRealCreds),
+    inheritedFromGlobalProfile: Boolean((profile.autoInject || options.preferSavedProfile) && !options.projectId && hasRealCreds),
     requiresUserCredentials: !hasRealCreds,
     projectId: fbConfig.projectId,
     inferredCollections: blueprintToWrite.collections.map((c) => c.path),
